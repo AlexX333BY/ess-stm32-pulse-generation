@@ -20,6 +20,7 @@
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
+#include <stdbool.h>
 
 /* Private typedef -----------------------------------------------------------*/
 
@@ -29,11 +30,14 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+uint16_t signalPeriod;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
+uint16_t Max(const uint16_t, const uint16_t);
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef*);
 
 /* Private user code ---------------------------------------------------------*/
 
@@ -55,10 +59,29 @@ int main(void)
   MX_GPIO_Init();
   MX_ADC1_Init();
 
+  HAL_ADCEx_Calibration_Start(&hadc1);
+  HAL_ADC_Start_IT(&hadc1);
+
   /* Infinite loop */
-  while (1)
+  while (true)
   {
+    HAL_GPIO_TogglePin(SIG_GPIO_Port, SIG_Pin);
+    HAL_Delay(Max(signalPeriod / 2, 1));
   }
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+  if (hadc == &hadc1)
+  {
+    signalPeriod = (uint16_t)HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Start_IT(&hadc1);
+  }
+}
+
+uint16_t Max(const uint16_t a, const uint16_t b)
+{
+  return a > b ? a : b;
 }
 
 /**
