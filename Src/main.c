@@ -21,12 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 #include <stdbool.h>
-
-/* Private typedef -----------------------------------------------------------*/
+#include <math.h>
 
 /* Private define ------------------------------------------------------------*/
-
-/* Private macro -------------------------------------------------------------*/
+#define FRACTIONAL_FREQ_DISPLAY_LENGTH 4
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
@@ -38,6 +36,13 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 uint16_t Max(const uint16_t, const uint16_t);
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef*);
+void InitDisplay(void);
+void UpdateDisplay(void);
+void ResetDisplay(void);
+bool PrintNextNumber(const uint8_t nextNumber);
+void PrintNextSymbol(const char symbol);
+void SendToDisplay(const bool isSymbol, const uint8_t data, const uint32_t cmdDelay);
+uint8_t GetDigitsCount(uint16_t number);
 
 /* Private user code ---------------------------------------------------------*/
 
@@ -60,6 +65,7 @@ int main(void)
   MX_ADC1_Init();
 
   HAL_ADCEx_Calibration_Start(&hadc1);
+  InitDisplay();
   HAL_ADC_Start_IT(&hadc1);
 
   /* Infinite loop */
@@ -74,7 +80,12 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
   if (hadc == &hadc1)
   {
-    signalPeriod = (uint16_t)HAL_ADC_GetValue(&hadc1);
+    const uint16_t oldPeriod = signalPeriod;
+    signalPeriod = Max((uint16_t)HAL_ADC_GetValue(&hadc1), 1);
+    if (oldPeriod != signalPeriod)
+    {
+      UpdateDisplay();
+    }
     HAL_ADC_Start_IT(&hadc1);
   }
 }
@@ -82,6 +93,100 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 uint16_t Max(const uint16_t a, const uint16_t b)
 {
   return a > b ? a : b;
+}
+
+void InitDisplay(void)
+{
+  HAL_Delay(16);
+  const uint8_t setBusTo8Bit = 0x34,
+    shiftOnWrite = 0x6,
+    enableDisplay = 0xC;
+  const uint8_t busCmdDelay = 1,
+    shiftCmdDelay = 1,
+    enableCmdDelay = 1;
+  SendToDisplay(false, setBusTo8Bit, busCmdDelay);
+  SendToDisplay(false, shiftOnWrite, shiftCmdDelay);
+  SendToDisplay(false, enableDisplay, enableCmdDelay);
+  ResetDisplay();
+}
+
+void ResetDisplay(void)
+{
+  const uint8_t resetDataCmd = 0x1,
+    resetDataDelay = 2;
+  SendToDisplay(false, resetDataCmd, resetDataDelay);
+}
+
+void SendToDisplay(const bool isSymbol, const uint8_t data, const uint32_t cmdDelay)
+{
+  HAL_GPIO_WritePin(DISPLAY_CMD_GPIO_Port, DISPLAY_CMD_Pin, isSymbol ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  
+  const uint8_t dataStartPin = 8;
+  HAL_GPIO_WritePin(GPIOA, data << dataStartPin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOA, (~data) << dataStartPin, GPIO_PIN_RESET);
+  
+  HAL_GPIO_WritePin(DISPLAY_SYNC_GPIO_Port, DISPLAY_SYNC_Pin, GPIO_PIN_SET);
+  HAL_Delay(1);
+  HAL_GPIO_WritePin(DISPLAY_SYNC_GPIO_Port, DISPLAY_SYNC_Pin, GPIO_PIN_RESET);
+  HAL_Delay(cmdDelay);
+  HAL_GPIO_WritePin(GPIOA, data << dataStartPin, GPIO_PIN_RESET);
+}
+
+void PrintNextSymbol(const char symbol)
+{
+  SendToDisplay(true, symbol, 1);
+}
+
+bool PrintNextNumber(const uint8_t nextNumber)
+{
+  const bool isNumberValid = nextNumber < 10;
+  if (isNumberValid)
+  {
+    const uint8_t asciiNumberOffset = 0x30;
+    PrintNextSymbol(nextNumber + asciiNumberOffset);
+  }
+  return isNumberValid;
+}
+
+void UpdateDisplay(void)
+{
+  ResetDisplay();
+  const double frequency = (double)1000 / signalPeriod;
+  const uint16_t integralFrequency = (uint16_t)frequency;
+  
+  const uint8_t integralFreqDigitsCount = GetDigitsCount(integralFrequency);
+  for (uint8_t curDigit = integralFreqDigitsCount; curDigit > 0; --curDigit)
+  {
+    PrintNextNumber(integralFrequency % (uint16_t)pow(10, curDigit) / pow(10, (curDigit - 1)));
+  }
+  
+  if (FRACTIONAL_FREQ_DISPLAY_LENGTH > 0)
+  {
+    PrintNextSymbol('.');
+    const double fractionalFrequency = frequency - integralFrequency;
+    for (uint8_t curDigit = 1; curDigit <= FRACTIONAL_FREQ_DISPLAY_LENGTH; ++curDigit)
+    {
+      PrintNextNumber((uint8_t)(fractionalFrequency * pow(10, curDigit)) % 10);
+    }
+  }
+  
+  const char postfix[] = " Hz";
+  for (uint8_t symbol = 0; symbol < sizeof(postfix) / sizeof(postfix[0]); ++symbol)
+  {
+    PrintNextSymbol(postfix[symbol]);
+  }
+}
+
+uint8_t GetDigitsCount(uint16_t number)
+{
+  uint8_t digitsCount = 0;
+  do
+  {
+    number /= 10;
+    ++digitsCount;
+  } while (number != 0);
+  
+  return digitsCount;
 }
 
 /**
@@ -185,7 +290,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
 }
 
 /**
